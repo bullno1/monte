@@ -347,6 +347,21 @@ monte_create(const monte_state_t* initial_state, monte_config_t config) {
 	return monte;
 }
 
+static bool
+monte_node_gives_opponent_instant_win(monte_node_t* node, monte_player_id_t player) {
+	for (
+		monte_node_t* itr = node->children;
+		itr != NULL;
+		itr = itr->next
+	) {
+		if (itr->instant_winner != MONTE_INVALID_PLAYER && itr->instant_winner != player) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void
 monte_iterate(monte_t* monte) {
 	monte_state_t* state = monte->tmp_state;
@@ -369,6 +384,10 @@ monte_iterate(monte_t* monte) {
 				if (itr->instant_winner == player) {
 					chosen_node = itr;
 					break;
+				}
+
+				if (monte_node_gives_opponent_instant_win(itr, player)) {
+					continue;
 				}
 
 				float win_rate = (float)itr->num_wins / (float)itr->num_visits;
@@ -465,7 +484,14 @@ monte_pick_move(monte_t* monte, monte_move_t* move) {
 
 void
 monte_submit_move(monte_iterator_t* itr, const monte_move_t* move) {
-	itr->fn(itr->userdata, move);
+	if (itr->fn == monte_submit_move_for_expansion) {
+		monte_submit_move_for_expansion(itr->userdata, move);
+	} else if (itr->fn == monte_submit_move_for_simulation) {
+		monte_submit_move_for_simulation(itr->userdata, move);
+	} else {
+		itr->fn(itr->userdata, move);
+	}
+
 }
 
 void

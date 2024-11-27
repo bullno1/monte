@@ -3,9 +3,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#define  RND_IMPLEMENTATION
+#include "rnd.h"
+
 #define MONTE_GAME_CONFIG_TYPE mnk_config_t
 #define MONTE_STATE_TYPE mnk_state_t
 #define MONTE_MOVE_TYPE mnk_move_t
+#define MONTE_RNG_STATE_TYPE rnd_pcg_t
 #define MONTE_IMPLEMENTATION
 #define MONTE_API static
 #define MONTE_USER_FN static
@@ -22,7 +26,7 @@ monte_user_alloc(size_t size, size_t alignment, monte_allocator_ctx_t* ctx) {
 
 float
 monte_user_rng_next(monte_rng_state_t* rng_state) {
-	return (float)rand() / (float)RAND_MAX;
+	return rnd_pcg_nextf(rng_state);
 }
 
 static mnk_state_t*
@@ -172,13 +176,15 @@ mnk_state_apply(mnk_state_t* state, mnk_move_t move) {
 
 mnk_ai_t*
 mnk_ai_create(const mnk_ai_config_t* config) {
-	monte_t* monte = monte_create(config->initial_state, (monte_config_t){
-		.exploration_param = sqrtf(1.5f),
+	monte_config_t monte_config = {
+		.exploration_param = sqrtf(2.5f),
 		.game_config = config->game_config,
 		.num_players = 2,
 		.state_size = sizeof(mnk_state_t) + config->game_config.width * config->game_config.height,
 		.state_alignment = _Alignof(mnk_state_t),
-	});
+	};
+	rnd_pcg_seed(&monte_config.rng_state, 123);
+	monte_t* monte = monte_create(config->initial_state, monte_config);
 	return (void*)monte;
 }
 
@@ -190,7 +196,7 @@ mnk_ai_destroy(mnk_ai_t* ai) {
 mnk_move_t
 mnk_ai_pick_move(mnk_ai_t* ai) {
 	monte_t* monte = (monte_t*)ai;
-	for (int i = 0; i < 10000; ++i) {
+	for (int i = 0; i < 30000; ++i) {
 		monte_iterate(monte);
 	}
 	mnk_move_t move = { 0 };

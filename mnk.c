@@ -202,7 +202,7 @@ mnk_ai_destroy(mnk_ai_t* ai) {
 static int
 mnk_ai_iterate(void* userdata) {
 	monte_t* monte = userdata;
-	for (int i = 0; i < 150000; ++i) {
+	for (int i = 0; i < 120000; ++i) {
 		monte_iterate(monte);
 	}
 	return 0;
@@ -223,7 +223,6 @@ mnk_ai_pick_move(mnk_ai_t* ai) {
 		mnk_move_t move;
 		float score;
 		monte_pick_move(ai->monte[i], &move, &score);
-		printf("%d %d %d\n", best_move.x, best_move.y, best_score);
 		if (score > best_score) {
 			best_move = move;
 			best_score = score;

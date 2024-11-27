@@ -170,19 +170,20 @@ typedef struct {
 	monte_index_t num_moves;
 	monte_move_t move;
 	monte_rng_state_t* rng_state;
-	monte_node_t** in_node;
+	monte_node_t* in_node;
 	monte_node_t** out_node;
+
+	monte_move_t end_move;
+	bool found_end_move;
+	const monte_state_t* current_state;
+	monte_state_t* tmp_state;
+	monte_state_info_t* tmp_state_info;
 } monte_iterator_for_expansion_t;
 
 typedef struct {
 	monte_index_t num_moves;
 	monte_move_t move;
 	monte_rng_state_t* rng_state;
-
-	bool found_decisive;
-	const monte_state_t* current_state;
-	monte_state_t* tmp_state;
-	monte_state_info_t* state_info;
 } monte_iterator_for_simulation_t;
 
 static inline monte_node_t*
@@ -237,7 +238,31 @@ monte_iterate_moves(const monte_state_t* state, monte_submit_move_fn_t fn, void*
 static inline void
 monte_submit_move_for_expansion(void* userdata, const monte_move_t* move) {
 	monte_iterator_for_expansion_t* itr = userdata;
-	monte_node_t** move_ptr = monte_find_node(itr->in_node, move);
+
+	// Prioritize ending move
+	//
+	// https://dke.maastrichtuniversity.nl/m.winands/documents/uctloa.pdf
+	//
+	// > This check at the leaf node must be performed because otherwise it
+	// > could take many simulations before the child leading to a mate-in-one
+	// > is selected and the node is proven.
+	if (itr->in_node->num_visits == 1 && !itr->found_end_move) {
+		monte_user_copy_state(itr->tmp_state, itr->current_state);
+		monte_user_inspect_state(itr->tmp_state, itr->tmp_state_info);
+		monte_player_id_t player = itr->tmp_state_info->current_player;
+		monte_user_apply_move(itr->tmp_state, move);
+		monte_user_inspect_state(itr->tmp_state, itr->tmp_state_info);
+
+		if (
+			itr->tmp_state_info->current_player == MONTE_INVALID_PLAYER
+			&& itr->tmp_state_info->scores[player] > 0
+		) {
+			itr->end_move = *move;
+			itr->found_end_move = true;
+		}
+	}
+
+	monte_node_t** move_ptr = monte_find_node(&itr->in_node->children, move);
 	if (*move_ptr != NULL) { return; }
 
 	bool move_chosen = false;
@@ -263,7 +288,10 @@ static inline monte_iterator_for_expansion_t
 monte_iterate_moves_for_expansion(const monte_state_t* state, monte_node_t* node, monte_t* monte) {
 	monte_iterator_for_expansion_t itr = {
 		.rng_state = &monte->config.rng_state,
-		.in_node = node != NULL ? &node->children : NULL,
+		.in_node = node,
+		.current_state = state,
+		.tmp_state = monte->tmp_state2,
+		.tmp_state_info = monte->tmp_state_info2,
 	};
 	monte_iterate_moves(state, monte_submit_move_for_expansion, &itr);
 	return itr;
@@ -272,28 +300,6 @@ monte_iterate_moves_for_expansion(const monte_state_t* state, monte_node_t* node
 static inline void
 monte_submit_move_for_simulation(void* userdata, const monte_move_t* move) {
 	monte_iterator_for_simulation_t* itr = userdata;
-
-	// If we have found the decisive move, there is no need to continue
-	if (itr->found_decisive) { return; }
-
-	// Check whether the submitted move immediately end the game in the current
-	// player's favor.
-	//monte_state_t* state = itr->tmp_state;
-	//monte_user_copy_state(state, itr->current_state);
-	//monte_state_info_t* state_info = itr->state_info;
-	//monte_user_inspect_state(state, state_info);
-	//monte_player_id_t player = state_info->current_player;
-
-	//monte_user_apply_move(state, move);
-	//monte_user_inspect_state(state, state_info);
-	//if (
-		//state_info->current_player == MONTE_INVALID_PLAYER
-		//&& state_info->scores[player] > 0
-	//) {
-		//itr->found_decisive = true;
-		//itr->move = *move;
-		//return;
-	//}
 
 	if (itr->num_moves == 0) {
 		itr->move = *move;
@@ -311,9 +317,6 @@ static inline monte_move_t
 monte_pick_move_for_simulation(const monte_state_t* state, monte_t* monte) {
 	monte_iterator_for_simulation_t itr = {
 		.rng_state = &monte->config.rng_state,
-		.current_state = state,
-		.tmp_state = monte->tmp_state2,
-		.state_info = monte->tmp_state_info2,
 	};
 	monte_iterate_moves(state, monte_submit_move_for_simulation, &itr);
 	return itr.move;
@@ -408,11 +411,13 @@ monte_iterate(monte_t* monte) {
 			monte_node_t* head = node->children;
 			monte_node_t* new_node = *itr.out_node = monte_alloc_node(monte);
 
-			monte_user_apply_move(state, &itr.move);
+			monte_move_t move = itr.found_end_move ? itr.end_move : itr.move;
+
+			monte_user_apply_move(state, &move);
 			monte_user_inspect_state(state, state_info);
 
 			*new_node = (monte_node_t) {
-				.move = itr.move,
+				.move = move,
 				.num_moves_left = -1,  // Unknown
 				.parent = node,
 				.current_player = state_info->current_player,

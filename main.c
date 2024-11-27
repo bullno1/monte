@@ -24,6 +24,29 @@ print_state(const mnk_state_t* state, mnk_move_t move) {
 	}
 }
 
+static inline void
+load_state(mnk_state_t* mnk, const char* state[]) {
+	for (int8_t y = 0; y < mnk->config.height; ++y) {
+		for (int8_t x = 0; x < mnk->config.width; ++x) {
+			char c = state[y][x];
+			switch (c) {
+				case '_':
+					break;
+				case '+':
+					mnk->player = 1;
+				case 'x':
+					mnk_state_set(mnk, x, y, 0);
+					break;
+				case '0':
+					mnk->player = 0;
+				case 'o':
+					mnk_state_set(mnk, x, y, 1);
+					break;
+			}
+		}
+	}
+}
+
 int main(int argc, const char* argv[]) {
 	mnk_config_t config = {
 		.width =  9,
@@ -31,6 +54,18 @@ int main(int argc, const char* argv[]) {
 		.stride = 5,
 	};
 	mnk_state_t* mnk = mnk_state_create(&config);
+	const char* state[] = {
+		"_________",
+		"_________",
+		"x___o_x__",
+		"_oo_xo___",
+		"__oxox___",
+		"__xoxx+__",
+		"xoooox___",
+		"_x___x___",
+		"_____o___",
+	};
+	load_state(mnk, state);
 
 	mnk_ai_config_t ai_config = {
 		.game_config = config,

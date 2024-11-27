@@ -58,4 +58,7 @@ mnk_ai_apply(mnk_ai_t* ai, mnk_move_t move);
 int8_t
 mnk_state_get(const mnk_state_t* state, int8_t x, int8_t y);
 
+void
+mnk_state_set(mnk_state_t* state, int8_t x, int8_t y, int8_t player);
+
 #endif

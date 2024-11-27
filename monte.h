@@ -155,6 +155,7 @@ struct monte_s {
 	monte_state_t* tmp_state;
 	monte_state_t* tmp_state2;
 	monte_state_info_t* tmp_state_info;
+	monte_state_info_t* tmp_state_info2;
 	monte_node_t* root;
 };
 
@@ -312,7 +313,7 @@ monte_pick_move_for_simulation(const monte_state_t* state, monte_t* monte) {
 		.rng_state = &monte->config.rng_state,
 		.current_state = state,
 		.tmp_state = monte->tmp_state2,
-		.state_info = monte->tmp_state_info,
+		.state_info = monte->tmp_state_info2,
 	};
 	monte_iterate_moves(state, monte_submit_move_for_simulation, &itr);
 	return itr.move;
@@ -327,6 +328,11 @@ monte_create(const monte_state_t* initial_state, monte_config_t config) {
 		.tmp_state = monte_user_create_state(&config.game_config),
 		.tmp_state2 = monte_user_create_state(&config.game_config),
 		.tmp_state_info = monte_user_alloc(
+			sizeof(monte_state_info_t) + sizeof(monte_index_t) * config.num_players,
+			_Alignof(monte_state_info_t),
+			config.allocator_ctx
+		),
+		.tmp_state_info2 = monte_user_alloc(
 			sizeof(monte_state_info_t) + sizeof(monte_index_t) * config.num_players,
 			_Alignof(monte_state_info_t),
 			config.allocator_ctx
@@ -347,21 +353,6 @@ monte_create(const monte_state_t* initial_state, monte_config_t config) {
 	return monte;
 }
 
-static bool
-monte_node_gives_opponent_instant_win(monte_node_t* node, monte_player_id_t player) {
-	for (
-		monte_node_t* itr = node->children;
-		itr != NULL;
-		itr = itr->next
-	) {
-		if (itr->instant_winner != MONTE_INVALID_PLAYER && itr->instant_winner != player) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
 void
 monte_iterate(monte_t* monte) {
 	monte_state_t* state = monte->tmp_state;
@@ -371,8 +362,8 @@ monte_iterate(monte_t* monte) {
 	monte_node_t* node = monte->root;
 	{
 		float c = monte->config.exploration_param;
-		monte_player_id_t player = node->current_player;
 		while (node->num_moves_left == 0) {
+			monte_player_id_t player = node->current_player;
 			float chosen_uct_score = -INFINITY;
 			monte_node_t* chosen_node = NULL;
 			float parent_log_n = logf((float)node->num_visits);
@@ -386,7 +377,7 @@ monte_iterate(monte_t* monte) {
 					break;
 				}
 
-				if (monte_node_gives_opponent_instant_win(itr, player)) {
+				if (itr->instant_winner != MONTE_INVALID_PLAYER && itr->instant_winner != player) {
 					continue;
 				}
 
@@ -427,18 +418,6 @@ monte_iterate(monte_t* monte) {
 				.current_player = state_info->current_player,
 				.instant_winner = MONTE_INVALID_PLAYER,
 			};
-			if (state_info->current_player == MONTE_INVALID_PLAYER) {
-				for (
-					monte_player_id_t player_index = 0;
-					player_index < monte->config.num_players;
-					++player_index
-				) {
-					if (state_info->scores[player_index] > 0) {
-						new_node->instant_winner = player_index;
-						break;
-					}
-				}
-			}
 
 			if (head != NULL) {
 				new_node->next = head->next;
@@ -450,19 +429,63 @@ monte_iterate(monte_t* monte) {
 	}
 
 	// Simulation
-	while (state_info->current_player != MONTE_INVALID_PLAYER) {
+	monte_state_info_t* sim_state_info = monte->tmp_state_info2;
+	monte_user_inspect_state(state, sim_state_info);
+	while (sim_state_info->current_player != MONTE_INVALID_PLAYER) {
 		monte_move_t move = monte_pick_move_for_simulation(state, monte);
 		monte_user_apply_move(state, &move);
-		monte_user_inspect_state(state, state_info);
+		monte_user_inspect_state(state, sim_state_info);
+	}
+
+	if (state_info->current_player == MONTE_INVALID_PLAYER) {
+		for (
+			monte_player_id_t player_index = 0;
+			player_index < monte->config.num_players;
+			++player_index
+		) {
+			if (state_info->scores[player_index] > 0) {
+				node->instant_winner = player_index;
+				break;
+			}
+		}
 	}
 
 	// Backpropagation
 	while (node->parent != NULL) {
-		monte_player_id_t player = node->parent->current_player;
+		monte_node_t* parent = node->parent;
+		monte_player_id_t player = parent->current_player;
 		node->num_visits += 1;
-		node->num_wins += state_info->scores[player];
+		node->num_wins += sim_state_info->scores[player];
 
-		node = node->parent;
+		// If the selected move is a game ending move
+		monte_player_id_t instant_winner = node->instant_winner;
+		if (instant_winner != MONTE_INVALID_PLAYER) {
+			if (instant_winner == player) {
+				// If the player about to act will win in one move, they will
+				// take it.
+				parent->instant_winner = instant_winner;
+			} else if (parent->num_moves_left == 0) {
+				// If all siblings lead to the same outcome, parent is a game
+				// ending move.
+				bool same_winner = true;
+				for (
+					monte_node_t* itr = parent->children;
+					itr != NULL;
+					itr = itr->next
+				) {
+					if (itr->instant_winner != instant_winner) {
+						same_winner = false;
+						break;
+					}
+				}
+
+				if (same_winner) {
+					parent->instant_winner = instant_winner;
+				}
+			}
+		}
+
+		node = parent;
 	}
 	monte->root->num_visits += 1;
 }

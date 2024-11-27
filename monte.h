@@ -112,7 +112,7 @@ MONTE_API void
 monte_iterate(monte_t* monte);
 
 MONTE_API void
-monte_pick_move(monte_t* monte, monte_move_t* move);
+monte_pick_move(monte_t* monte, monte_move_t* move, float* score);
 
 MONTE_API void
 monte_submit_move(monte_iterator_t* itr, const monte_move_t* move);
@@ -490,19 +490,26 @@ monte_iterate(monte_t* monte) {
 	monte->root->num_visits += 1;
 }
 
+static float
+monte_node_score(monte_node_t* node) {
+	return node->num_visits;
+}
+
 void
-monte_pick_move(monte_t* monte, monte_move_t* move) {
-	monte_index_t num_visits = -1;
+monte_pick_move(monte_t* monte, monte_move_t* move, float* score) {
+	float best_score = -INFINITY;
 	for (
 		monte_node_t* itr = monte->root->children;
 		itr != NULL;
 		itr = itr->next
 	) {
-		if (itr->num_visits > num_visits) {
+		float score = monte_node_score(itr);
+		if (score > best_score) {
 			*move = itr->move;
-			num_visits = itr->num_visits;
+			best_score = score;
 		}
 	}
+	*score = best_score;
 }
 
 void

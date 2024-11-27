@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <threads.h>
 
 #define  RND_IMPLEMENTATION
 #include "rnd.h"
@@ -15,8 +16,10 @@
 #define MONTE_USER_FN static
 #include "monte.h"
 
+#define NUM_MONTE_THREADS 4
+
 struct mnk_ai_s {
-	monte_t* monte;
+	monte_t* monte[NUM_MONTE_THREADS];
 };
 
 static void*
@@ -177,15 +180,18 @@ mnk_state_apply(mnk_state_t* state, mnk_move_t move) {
 mnk_ai_t*
 mnk_ai_create(const mnk_ai_config_t* config) {
 	monte_config_t monte_config = {
-		.exploration_param = sqrtf(2.5f),
+		.exploration_param = sqrtf(2.0f),
 		.game_config = config->game_config,
 		.num_players = 2,
 		.state_size = sizeof(mnk_state_t) + config->game_config.width * config->game_config.height,
 		.state_alignment = _Alignof(mnk_state_t),
 	};
-	rnd_pcg_seed(&monte_config.rng_state, 123);
-	monte_t* monte = monte_create(config->initial_state, monte_config);
-	return (void*)monte;
+	mnk_ai_t* ai = malloc(sizeof(mnk_ai_t));
+	for (int i = 0; i < NUM_MONTE_THREADS; ++i) {
+		rnd_pcg_seed(&monte_config.rng_state, i);
+		ai->monte[i] = monte_create(config->initial_state, monte_config);
+	}
+	return ai;
 }
 
 void
@@ -193,18 +199,43 @@ mnk_ai_destroy(mnk_ai_t* ai) {
 	free(ai);
 }
 
-mnk_move_t
-mnk_ai_pick_move(mnk_ai_t* ai) {
-	monte_t* monte = (monte_t*)ai;
-	for (int i = 0; i < 30000; ++i) {
+static int
+mnk_ai_iterate(void* userdata) {
+	monte_t* monte = userdata;
+	for (int i = 0; i < 150000; ++i) {
 		monte_iterate(monte);
 	}
-	mnk_move_t move = { 0 };
-	monte_pick_move(monte, &move);
-	return move;
+	return 0;
+}
+
+mnk_move_t
+mnk_ai_pick_move(mnk_ai_t* ai) {
+	thrd_t threads[NUM_MONTE_THREADS];
+	for (int i = 0; i < NUM_MONTE_THREADS; ++i) {
+		thrd_create(&threads[i], mnk_ai_iterate, ai->monte[i]);
+	}
+	for (int i = 0; i < NUM_MONTE_THREADS; ++i) {
+		thrd_join(threads[i], NULL);
+	}
+	monte_index_t best_score = -1;
+	mnk_move_t best_move = { 0 };
+	for (int i = 0; i < NUM_MONTE_THREADS; ++i) {
+		mnk_move_t move;
+		float score;
+		monte_pick_move(ai->monte[i], &move, &score);
+		printf("%d %d %d\n", best_move.x, best_move.y, best_score);
+		if (score > best_score) {
+			best_move = move;
+			best_score = score;
+		}
+	}
+
+	return best_move;
 }
 
 void
 mnk_ai_apply(mnk_ai_t* ai, mnk_move_t move) {
-	monte_apply_move((void*)ai, &move);
+	for (int i = 0; i < NUM_MONTE_THREADS; ++i) {
+		monte_apply_move(ai->monte[i], &move);
+	}
 }

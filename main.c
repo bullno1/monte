@@ -1,21 +1,21 @@
 #include "mnk.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
+#include <stdbool.h>
 
 static void
-print_state(const mnk_state_t* state) {
+print_state(const mnk_state_t* state, mnk_move_t move) {
 	for (int8_t y = 0; y < state->config.height; ++y) {
 		for (int8_t x = 0; x < state->config.width; ++x) {
 			int8_t value = mnk_state_get(state, x, y);
 
+			bool is_latest_move = x == move.x && y == move.y;
 			char c;
 			if (value == -1) {
 				c = '_';
 			} else if (value == 0) {
-				c = 'x';
+				c = is_latest_move ? '+' : 'x';
 			} else {
-				c = 'o';
+				c = is_latest_move ? '0' : 'o';
 			}
 
 			printf(" %c", c);
@@ -40,13 +40,13 @@ int main(int argc, const char* argv[]) {
 
 	(void)ai;
 
-	print_state(mnk);
+	print_state(mnk, (mnk_move_t) { -1, -1 });
 
 	while (mnk->player != -1) {
 		mnk_move_t move = mnk_ai_pick_move(ai);
 		printf("Move: %d %d\n", move.x, move.y);
 		mnk_state_apply(mnk, move);
-		print_state(mnk);
+		print_state(mnk, move);
 		mnk_ai_apply(ai, move);
 	}
 	printf("Winner: %d\n", mnk->winner);

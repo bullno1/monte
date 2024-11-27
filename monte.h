@@ -139,6 +139,7 @@ struct monte_node_s {
 	monte_index_t num_moves_left;
 	monte_node_t* next;
 	monte_node_t* children;
+	monte_player_id_t instant_winner;
 
 	monte_node_t* parent;
 	monte_player_id_t current_player;
@@ -152,17 +153,36 @@ struct monte_s {
 
 	monte_state_t* current_state;
 	monte_state_t* tmp_state;
+	monte_state_t* tmp_state2;
 	monte_state_info_t* tmp_state_info;
 	monte_node_t* root;
 };
 
+typedef void (*monte_submit_move_fn_t)(void* userdata, const monte_move_t* move);
+
 struct monte_iterator_s {
+	monte_submit_move_fn_t fn;
+	void* userdata;
+};
+
+typedef struct {
 	monte_index_t num_moves;
 	monte_move_t move;
-	monte_t* monte;
+	monte_rng_state_t* rng_state;
 	monte_node_t** in_node;
 	monte_node_t** out_node;
-};
+} monte_iterator_for_expansion_t;
+
+typedef struct {
+	monte_index_t num_moves;
+	monte_move_t move;
+	monte_rng_state_t* rng_state;
+
+	bool found_decisive;
+	const monte_state_t* current_state;
+	monte_state_t* tmp_state;
+	monte_state_info_t* state_info;
+} monte_iterator_for_simulation_t;
 
 static inline monte_node_t*
 monte_alloc_node(monte_t* monte) {
@@ -186,7 +206,7 @@ monte_free_node(monte_node_t* node, monte_t* monte) {
 }
 
 static inline monte_node_t**
-monte_find_node(monte_node_t** root, const monte_move_t* move, monte_t* monte) {
+monte_find_node(monte_node_t** root, const monte_move_t* move) {
 	monte_node_t** node_itr = root;
 	monte_hash_t hash_itr = monte_user_hash_move(move);
 	for (
@@ -204,14 +224,98 @@ monte_find_node(monte_node_t** root, const monte_move_t* move, monte_t* monte) {
 	return node_itr;
 }
 
-static inline monte_iterator_t
-monte_iterate_moves(const monte_state_t* state, monte_node_t* node, monte_t* monte) {
+static inline void
+monte_iterate_moves(const monte_state_t* state, monte_submit_move_fn_t fn, void* userdata) {
 	monte_iterator_t itr = {
-		.monte = monte,
-		.in_node = node != NULL ? &node->children : NULL,
+		.fn = fn,
+		.userdata = userdata,
 	};
 	monte_user_iterate_moves(state, &itr);
+}
+
+static inline void
+monte_submit_move_for_expansion(void* userdata, const monte_move_t* move) {
+	monte_iterator_for_expansion_t* itr = userdata;
+	monte_node_t** move_ptr = monte_find_node(itr->in_node, move);
+	if (*move_ptr != NULL) { return; }
+
+	bool move_chosen = false;
+	if (itr->num_moves == 0) {
+		itr->move = *move;
+		++itr->num_moves;
+		move_chosen = true;
+	} else {
+		monte_index_t num_moves = ++itr->num_moves;
+		float random_number = monte_user_rng_next(itr->rng_state);
+		if ((random_number * (float)num_moves) < 1.f) {
+			itr->move = *move;
+			move_chosen = true;
+		}
+	}
+
+	if (move_chosen) {
+		itr->out_node = move_ptr;
+	}
+}
+
+static inline monte_iterator_for_expansion_t
+monte_iterate_moves_for_expansion(const monte_state_t* state, monte_node_t* node, monte_t* monte) {
+	monte_iterator_for_expansion_t itr = {
+		.rng_state = &monte->config.rng_state,
+		.in_node = node != NULL ? &node->children : NULL,
+	};
+	monte_iterate_moves(state, monte_submit_move_for_expansion, &itr);
 	return itr;
+}
+
+static inline void
+monte_submit_move_for_simulation(void* userdata, const monte_move_t* move) {
+	monte_iterator_for_simulation_t* itr = userdata;
+
+	// If we have found the decisive move, there is no need to continue
+	if (itr->found_decisive) { return; }
+
+	// Check whether the submitted move immediately end the game in the current
+	// player's favor.
+	//monte_state_t* state = itr->tmp_state;
+	//monte_user_copy_state(state, itr->current_state);
+	//monte_state_info_t* state_info = itr->state_info;
+	//monte_user_inspect_state(state, state_info);
+	//monte_player_id_t player = state_info->current_player;
+
+	//monte_user_apply_move(state, move);
+	//monte_user_inspect_state(state, state_info);
+	//if (
+		//state_info->current_player == MONTE_INVALID_PLAYER
+		//&& state_info->scores[player] > 0
+	//) {
+		//itr->found_decisive = true;
+		//itr->move = *move;
+		//return;
+	//}
+
+	if (itr->num_moves == 0) {
+		itr->move = *move;
+		++itr->num_moves;
+	} else {
+		monte_index_t num_moves = ++itr->num_moves;
+		float random_number = monte_user_rng_next(itr->rng_state);
+		if ((random_number * (float)num_moves) < 1.f) {
+			itr->move = *move;
+		}
+	}
+}
+
+static inline monte_move_t
+monte_pick_move_for_simulation(const monte_state_t* state, monte_t* monte) {
+	monte_iterator_for_simulation_t itr = {
+		.rng_state = &monte->config.rng_state,
+		.current_state = state,
+		.tmp_state = monte->tmp_state2,
+		.state_info = monte->tmp_state_info,
+	};
+	monte_iterate_moves(state, monte_submit_move_for_simulation, &itr);
+	return itr.move;
 }
 
 monte_t*
@@ -221,6 +325,7 @@ monte_create(const monte_state_t* initial_state, monte_config_t config) {
 		.config = config,
 		.current_state = monte_user_create_state(&config.game_config),
 		.tmp_state = monte_user_create_state(&config.game_config),
+		.tmp_state2 = monte_user_create_state(&config.game_config),
 		.tmp_state_info = monte_user_alloc(
 			sizeof(monte_state_info_t) + sizeof(monte_index_t) * config.num_players,
 			_Alignof(monte_state_info_t),
@@ -251,6 +356,7 @@ monte_iterate(monte_t* monte) {
 	monte_node_t* node = monte->root;
 	{
 		float c = monte->config.exploration_param;
+		monte_player_id_t player = node->current_player;
 		while (node->num_moves_left == 0) {
 			float chosen_uct_score = -INFINITY;
 			monte_node_t* chosen_node = NULL;
@@ -260,6 +366,11 @@ monte_iterate(monte_t* monte) {
 				itr != NULL;
 				itr = itr->next
 			) {
+				if (itr->instant_winner == player) {
+					chosen_node = itr;
+					break;
+				}
+
 				float win_rate = (float)itr->num_wins / (float)itr->num_visits;
 				float explore_rate = c * sqrtf(parent_log_n / (float)itr->num_visits);
 				float uct_score = win_rate + explore_rate;
@@ -280,7 +391,7 @@ monte_iterate(monte_t* monte) {
 	monte_state_info_t* state_info = monte->tmp_state_info;
 	monte_user_inspect_state(state, state_info);
 	if (state_info->current_player != MONTE_INVALID_PLAYER) {
-		monte_iterator_t itr = monte_iterate_moves(state, node, monte);
+		monte_iterator_for_expansion_t itr = monte_iterate_moves_for_expansion(state, node, monte);
 		node->num_moves_left = itr.num_moves - 1;
 
 		if (itr.num_moves > 0) {
@@ -295,7 +406,20 @@ monte_iterate(monte_t* monte) {
 				.num_moves_left = -1,  // Unknown
 				.parent = node,
 				.current_player = state_info->current_player,
+				.instant_winner = MONTE_INVALID_PLAYER,
 			};
+			if (state_info->current_player == MONTE_INVALID_PLAYER) {
+				for (
+					monte_player_id_t player_index = 0;
+					player_index < monte->config.num_players;
+					++player_index
+				) {
+					if (state_info->scores[player_index] > 0) {
+						new_node->instant_winner = player_index;
+						break;
+					}
+				}
+			}
 
 			if (head != NULL) {
 				new_node->next = head->next;
@@ -308,8 +432,8 @@ monte_iterate(monte_t* monte) {
 
 	// Simulation
 	while (state_info->current_player != MONTE_INVALID_PLAYER) {
-		monte_iterator_t itr = monte_iterate_moves(state, NULL, monte);
-		monte_user_apply_move(state, &itr.move);
+		monte_move_t move = monte_pick_move_for_simulation(state, monte);
+		monte_user_apply_move(state, &move);
 		monte_user_inspect_state(state, state_info);
 	}
 
@@ -341,29 +465,7 @@ monte_pick_move(monte_t* monte, monte_move_t* move) {
 
 void
 monte_submit_move(monte_iterator_t* itr, const monte_move_t* move) {
-	monte_node_t** move_ptr = NULL;
-	if (itr->in_node != NULL) {
-		move_ptr = monte_find_node(itr->in_node, move, itr->monte);
-		if (*move_ptr != NULL) { return; }
-	}
-
-	bool move_chosen = 0;
-	if (itr->num_moves == 0) {
-		itr->move = *move;
-		++itr->num_moves;
-		move_chosen = true;
-	} else {
-		monte_index_t num_moves = ++itr->num_moves;
-		float random_number = monte_user_rng_next(&itr->monte->config.rng_state);
-		if ((random_number * (float)num_moves) < 1.f) {
-			itr->move = *move;
-			move_chosen = true;
-		}
-	}
-
-	if (move_chosen && itr->in_node != NULL) {
-		itr->out_node = move_ptr;
-	}
+	itr->fn(itr->userdata, move);
 }
 
 void

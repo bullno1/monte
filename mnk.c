@@ -111,7 +111,7 @@ monte_user_inspect_state(const monte_state_t* state, monte_state_info_t* info) {
 
 	if (state->winner != MONTE_INVALID_PLAYER) {
 		info->scores[state->winner] = 1;
-		info->scores[1 - state->winner] = 0;
+		info->scores[1 - state->winner] = -1;
 	}
 }
 
@@ -173,7 +173,7 @@ mnk_state_apply(mnk_state_t* state, mnk_move_t move) {
 mnk_ai_t*
 mnk_ai_create(const mnk_ai_config_t* config) {
 	monte_t* monte = monte_create(config->initial_state, (monte_config_t){
-		.exploration_param = sqrtf(2.f),
+		.exploration_param = sqrtf(1.5f),
 		.game_config = config->game_config,
 		.num_players = 2,
 		.state_size = sizeof(mnk_state_t) + config->game_config.width * config->game_config.height,
@@ -190,7 +190,7 @@ mnk_ai_destroy(mnk_ai_t* ai) {
 mnk_move_t
 mnk_ai_pick_move(mnk_ai_t* ai) {
 	monte_t* monte = (monte_t*)ai;
-	for (int i = 0; i < 100000; ++i) {
+	for (int i = 0; i < 10000; ++i) {
 		monte_iterate(monte);
 	}
 	mnk_move_t move = { 0 };

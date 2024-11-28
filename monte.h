@@ -62,8 +62,6 @@ typedef struct monte_iterator_s monte_iterator_t;
 
 typedef struct monte_config_s {
 	monte_player_id_t num_players;
-	size_t state_size;
-	size_t state_alignment;
 	float exploration_param;
 	monte_game_config_t game_config;
 
